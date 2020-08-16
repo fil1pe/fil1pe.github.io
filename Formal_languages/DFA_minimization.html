@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>DFA minimization</title>
+    <script src="vue.js"></script>
+    <script type="module">
+        import DFA from './DFA.js'
+
+        function sleep(time){
+            return new Promise(resolve => setTimeout(resolve, time));
+        }
+
+        DFA.input('dfa-input', gen_dfa, 'Minimize', 'a,b,c,d,e,f,g', '0,1',
+            '(a,0,b), (a,1,c), (b,0,a), (b,1,d), (c,0,e), (c,1,f), (d,0,e), (d,1,f), (e,0,e), (e,1,f), (f,0,f), (f,1,f), (g,0,g), (g,1,f)',
+            'a', 'c,d,e,g')
+        Vue.component('minimized', {template: '<div></div>'})
+
+        var states = [], min_table = [{}], message = ['Enter a DFA and press Minimize.']
+        var vue = new Vue({
+            el: "#app",
+            data: {
+                message: message,
+                states: states,
+                min_table: min_table
+            }
+        })
+
+        // Minimizes DFA entered by user:
+        async function gen_dfa(states, alphabet, transition, start, accept){
+            let g = new DFA(states, alphabet, transition, start, accept)
+            g.total_transition()
+            message[0] = `Make transition function total if needed.`
+            vue.$forceUpdate()
+            await sleep(1000)
+            init_min_table(g)
+            message[0] = `Initialize minimization table.`
+            vue.$forceUpdate()
+            await sleep(1000)
+            minimize(g).then(g => {
+                g.table('minimized')
+                vue.$forceUpdate()
+            })
+        }
+        
+        // Initializes minimization table:
+        function init_min_table(g){
+            states.length = 0
+            min_table[0] = {}
+
+            for(let i in g.states){
+                let q = g.states[i]
+                min_table[0][q] = {}
+                for(let j in g.states){
+                    let p = g.states[j]
+                    if(min_table[0][p] !== undefined && min_table[0][p][q] !== undefined)
+                        min_table[0][q][p] = min_table[0][p][q]
+                    else
+                        min_table[0][q][p] = [0]
+                }
+                states.push(q)
+            }
+
+            vue.$forceUpdate()
+        }
+
+        async function minimize(g){
+            // Removes unreachable states:
+
+            let reachable = [], queue = [g.start]
+
+            while(queue.length){
+                let q = queue.shift()
+                if(!reachable.includes(q)){
+                    reachable.push(q)
+                    for(let s of g.alphabet){
+                        let p = g.transition(q, s)
+                        if(p !== undefined)
+                            queue.push(p)
+                    }
+                }
+            }
+
+            for(let i in g.states){
+                let q = g.states[i]
+                if(!reachable.includes(q)){
+                    for(let p of g.states)
+                        min_table[0][q][p][0] = 3
+                    message[0] = `Remove state ${q} as it is unreachable.`
+                    vue.$forceUpdate()
+                    await sleep(1000)
+                }
+            }
+
+            queue = []
+
+            // Marks each pair (q, p) where p is accepting and q is not:
+
+            for(let i in g.states){
+                let q = g.states[i]
+                for(let j in g.states){
+                    if(j >= i) break
+                    let p = g.states[j]
+                    if(g.accept.includes(q) ^ g.accept.includes(p) && min_table[0][q][p][0] === 0){
+                        queue.push([q,p])
+                        min_table[0][q][p][0] = 1
+                        message[0] = `Mark (${q}, ${p}) as one is accepting and the other is not.`
+                        vue.$forceUpdate()
+                        await sleep(600)
+                    }
+                }
+            }
+
+            // Marks each pair (q, p) where for some s (transition(q,s), transition(p,s)) is marked:
+
+            while(queue.length){
+                let curr_pair = queue.shift()
+                for(let s of g.alphabet){
+                    let rev0 = g.rev_transition(curr_pair[0], s)
+                    let rev1 = g.rev_transition(curr_pair[1], s)
+                    for(let q of rev0)
+                        for(let p of rev1)
+                            if(q !== undefined && p !== undefined && min_table[0][q][p][0] === 0){
+                                queue.push([q,p])
+                                min_table[0][q][p][0] = 1
+                                message[0] = `Mark (${q}, ${p}) as (δ(${q}, ${s}), δ(${p}, ${s}))=(${curr_pair[0]}, ${curr_pair[1]}) is marked.`
+                                vue.$forceUpdate()
+                                await sleep(2000)
+                            }
+                }
+                min_table[0][curr_pair[0]][curr_pair[1]][0] = 2
+                message[0] = `Dequeue (${curr_pair[0]}, ${curr_pair[1]}).`
+                vue.$forceUpdate()
+                await sleep(600)
+            }
+
+            // Gathers the pairs of indistinguishable states:
+
+            let indistinguish_states = []
+
+            for(let i in g.states){
+                let q = g.states[i]
+                if(min_table[0][q][q][0] !== 3)
+                    for(let j in g.states){
+                        let p = g.states[j]
+                        let set = new Set()
+                        if(i == j) set.add(q)
+                        else if(j < i && min_table[0][q][p][0] === 0){
+                            set.add(q)
+                            set.add(p)
+                        }
+                        if(set.size) indistinguish_states.push(set)
+                    }
+            }
+
+            // Combines indistinguishable states:
+
+            let new_states = [], new_start = undefined, new_accept = []
+
+            for(let i=0; i<indistinguish_states.length; i++){
+                let set = indistinguish_states[i]
+                for(let q of set)
+                    for(let j=i+1; j<indistinguish_states.length; j++)
+                        if(indistinguish_states[j].has(q)){
+                            for(let p of indistinguish_states[j])
+                                set.add(p)
+                            indistinguish_states[j] = new Set()
+                        }
+                let arr = Array.from(set)
+                if(set.size) new_states.push(arr)
+                if(set.has(g.start)) new_start = arr
+                for(let q of set){
+                    if(g.accept.includes(q))
+                        new_accept.push(arr)
+                    break
+                }
+            }
+
+            // Defines transition function:
+            
+            let new_transition = {}
+
+            for(let set of new_states)
+                for(let s of g.alphabet)
+                    for(let q of set){
+                        let p = g.transition(q, s)
+                        if(p !== undefined)
+                            for(let set0 of new_states)
+                                if(set0.includes(p)){
+                                    if(new_transition[set] === undefined)
+                                        new_transition[set] = {}
+                                    new_transition[set][s] = [set0]
+                                }
+                        break
+                    }
+            
+            // Finally, the minimized automaton:
+
+            message[0] = `Minimization is complete.`
+            vue.$forceUpdate()
+
+            return new DFA(new_states, [...g.alphabet], new_transition, new_start, new_accept)
+        }
+    </script>
+    <link rel="stylesheet" href="NFA.css">
+    <style>
+        html {
+            text-align: center;
+        }
+
+        * {
+            margin: 0 auto;
+        }
+
+        #message {
+            width: 400px;
+            height: 80px;
+            padding: 5px;
+            display: flex;
+            margin: 0 auto;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid black;
+        }
+
+        #min-table td, #min-table th {
+            width: 35px;
+            height: 35px;
+            background-color: #52c8ff;
+            text-align: center;
+        }
+
+        #min-table th {
+            background: none;
+            font-weight: bold;
+        }
+
+        #min-table td.useless {
+            background-color: #dbdbdb;
+        }
+
+        #min-table td.queued {
+            background-color: #fff352;
+        }
+
+        #min-table td.distinguishable {
+            background-color: #ffc552;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>DFA minimization</h1>
+    <div id="app">
+        <dfa-input></dfa-input>
+        <div id="message">{{message[0]}}</div>
+        <table id="min-table">
+            <thead>
+                <tr>
+                    <th></th>
+                    <th v-for="q in states">{{q}}</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr v-for="(q,i) in states">
+                    <th>{{q}}</th>
+                    <template v-for="(p,j) in states">
+                        <template v-if="i - 1 < j">
+                            <td class="useless"></td>
+                        </template>
+                        <template v-else>
+                            <template v-if="min_table[0][q][p][0] === 0">
+                                <td>≈</td>
+                            </template>
+                            <template v-else-if="min_table[0][q][p][0] === 1">
+                                <td class="queued"></td>
+                            </template>
+                            <template v-else-if="min_table[0][q][p][0] === 2">
+                                <td class="distinguishable"></td>
+                            </template>
+                            <template v-else>
+                                <td class="useless"></td>
+                            </template>
+                        </template>
+                    </template>
+                </tr>
+            </tbody>
+        </table>
+        <minimized><h2>Minimized DFA</h2></minimized> 
+    </div>
+</body>
+
+</html> 
